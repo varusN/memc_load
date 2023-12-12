@@ -119,8 +119,8 @@ def process_file(options, fn):
                 else:
                     errors += result
     for chunk in mc:
-        if len(chunk) > 0:
-            result = insert_appsinstalled(memc[appsinstalled.dev_type], memc_addr, mc[appsinstalled.dev_type], options.dry)
+        if len(mc[chunk]) > 0:
+            result = insert_appsinstalled(memc[chunk], memc_addr, mc[chunk], options.dry)
             if result > 0:
                 processed += (config["CHUNK"] - result)
             else:
