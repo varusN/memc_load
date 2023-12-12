@@ -25,6 +25,7 @@ config = {
     "NORMAL_ERR_RATE": 0.01,
     "MEMC_SOCKET_TIMOUT": 3,
     "MEMC_RETRY": 2,
+    "CHUNK": 1000,
 }
 
 def dot_rename(path):
@@ -33,23 +34,28 @@ def dot_rename(path):
     os.rename(path, os.path.join(head, "." + fn))
 
 
-def insert_appsinstalled(memc, memc_addr, appsinstalled, dry_run=False):
-    ua = appsinstalled_pb2.UserApps()
-    ua.lat = appsinstalled.lat
-    ua.lon = appsinstalled.lon
-    key = "%s:%s" % (appsinstalled.dev_type, appsinstalled.dev_id)
-    ua.apps.extend(appsinstalled.apps)
-    packed = ua.SerializeToString()
+def insert_appsinstalled(memc, memc_addr, chunk, dry_run=False):
+    mset = {}
+    for app in chunk:
+        ua = appsinstalled_pb2.UserApps()
+        ua.lat = app.lat
+        ua.lon = app.lon
+        key = "%s:%s" % (app.dev_type, app.dev_id)
+        ua.apps.extend(app.apps)
+        packed = ua.SerializeToString()
+        mset[key] = packed
     try:
         if dry_run:
             logging.debug("%s - %s -> %s" % (memc_addr, key, str(ua).replace("\n", " ")))
         else:
             for _ in range(config["MEMC_RETRY"]):
-                memc.set(key, packed)
+                result = memc.set_multi(mset)
+                if len(result) > 0:
+                    mset = {k:v for k, v in mset.items() if k in result}
+            return len(result)
     except Exception as e:
         logging.exception("Cannot write to memc %s: %s" % (memc_addr, e))
-        return False
-    return True
+    return config["CHUNK"]
 
 
 def parse_appsinstalled(line):
@@ -79,6 +85,12 @@ def process_file(options, fn):
         "adid": options.adid,
         "dvid": options.dvid,
     }
+    mc = {
+        "idfa": [],
+        "gaid": [],
+        "adid": [],
+        "dvid": []
+    }
     memc = dict()
     for device_type in device_memc:
         memc[device_type] = memcache.Client([device_memc[device_type]], socket_timeout=config["MEMC_SOCKET_TIMOUT"])
@@ -98,11 +110,21 @@ def process_file(options, fn):
                 errors += 1
                 logging.error(f'Unknow device type: {appsinstalled.dev_type}, file {fn}')
                 continue
-            ok = insert_appsinstalled(memc[appsinstalled.dev_type], memc_addr, appsinstalled, options.dry)
-            if ok:
-                processed += 1
+            mc[appsinstalled.dev_type].append(appsinstalled)
+            if len(mc[appsinstalled.dev_type]) == config["CHUNK"]:
+                result = insert_appsinstalled(memc[appsinstalled.dev_type], memc_addr, mc[appsinstalled.dev_type], options.dry)
+                mc[appsinstalled.dev_type] = []
+                if result > 0:
+                    processed += (config["CHUNK"] - result)
+                else:
+                    errors += result
+    for chunk in mc:
+        if len(chunk) > 0:
+            result = insert_appsinstalled(memc[appsinstalled.dev_type], memc_addr, mc[appsinstalled.dev_type], options.dry)
+            if result > 0:
+                processed += (config["CHUNK"] - result)
             else:
-                errors += 1
+                errors += result
     if not processed:
         dot_rename(fn)
         return [fn, 0]
