@@ -49,7 +49,8 @@ def insert_appsinstalled(memc, memc_addr, chunk, dry_run=False):
             logging.debug("%s - %s -> %s" % (memc_addr, key, str(ua).replace("\n", " ")))
         else:
             for _ in range(config["MEMC_RETRY"]):
-                result = memc.set_multi(mset)
+                if len(mset) > 0:
+                    result = memc.set_multi(mset)
                 if len(result) > 0:
                     mset = {k:v for k, v in mset.items() if k in result}
             return len(result)
